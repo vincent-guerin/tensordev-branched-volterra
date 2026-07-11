@@ -1,4 +1,4 @@
-# tensordev
+# tensordev-branched-volterra
 
 JAX-based tensor algebra library for signatures, free developments, Volterra signatures and inner product-kernels thereof.
 
@@ -19,13 +19,13 @@ The package is developed and tested primarily with the JAX backend.
 ## Installation
 
 ```bash
-pip install tensordev
+pip install tensordev-branched-volterra
 ```
 
 For the latest development version:
 
 ```bash
-pip install git+https://github.com/hagerpa/tensordev.git
+pip install git+https://github.com/vincent-guerin/tensordev-branched-volterra.git@main
 ```
 
 ## License

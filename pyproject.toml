@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tensordev"
+name = "tensordev-branched-volterra"
 version = "0.0.2"
 description = "JAX-based tensor algebra for signatures, Volterra signatures, free developments, and signature kernels."
 readme = "README.md"
