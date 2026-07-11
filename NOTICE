@@ -1,0 +1,6 @@
+This product includes software developed by the contributors to hagerpa/tensordev
+and distributed under the Apache License, Version 2.0.
+
+The branched Volterra module is an independent experimental finite-grid research
+prototype. It is not a claim of a renormalised stochastic lift for arbitrary
+singular drivers.

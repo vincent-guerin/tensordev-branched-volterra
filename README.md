@@ -260,8 +260,40 @@ Available kernel constructors:
 
 Setting `beta=1` with `ConvolutionKernel.fractional` recovers the classical iterated-integral signature.
 
-### `tensordev.kernel` — signature kernels
+### `tensordev.branched_volterra` - branched Volterra signatures (experimental)
 
+The experimental `branched_volterra` module represents Volterra iterated
+integrals indexed by canonical decorated rooted trees. It is designed for
+nonlinear memory features, where a tree records how lower-order Volterra
+integrals combine before the next integration. The current implementation is
+a differentiable JAX left-point product-integration scheme for discretely
+observed or smooth paths.
+
+```python
+import jax.numpy as jnp
+from tensordev.branched_volterra import BranchedVolterraSignature, fractional_causal_weights
+
+times = jnp.linspace(0.0, 1.0, 51)
+X = jnp.stack([jnp.sin(times), times], axis=-1)[None]  # (batch=1, nodes=51, d=2)
+weights = fractional_causal_weights(times, beta=0.7)
+
+transform = BranchedVolterraSignature(dimension=2, trunc=3)
+result = transform(X, weights)
+print(result.values.shape)  # (1, number_of_decorated_trees_up_to_degree_3)
+```
+
+The tree basis uses the non-planar Butcher/Connes-Kreimer convention and is
+closed under subtrees. `RootedTree` can query one coefficient, and
+`symmetry_factor` returns its Butcher symmetry factor.
+
+This is a finite-grid research prototype, not yet a renormalised stochastic
+Volterra rough-path lift for arbitrary singular random drivers. The latter
+requires explicit Ito/Stratonovich and renormalisation data. See
+[`docs/branched_volterra.md`](docs/branched_volterra.md) for the recursion and
+
+scope.
+
+### `tensordev.kernel` — signature kernels
 Kernel objects for empirical statistics: batchwise values, Gram matrices, MMD, and scoring rules. All inherit from `BaseKernel`.
 
 | Class | Description |
