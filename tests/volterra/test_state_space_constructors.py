@@ -32,6 +32,15 @@ def test_rough_fractional_mixture_has_positive_weights_and_runs_vsig():
     assert jnp.all(kernel.b >= 0.0)
 
 
+def test_direct_mittag_leffler_runs_without_a_markovian_mixture():
+    from tensordev.volterra import VolterraSignature
+
+    kernel = ConvolutionKernel.mittag_leffler(
+        alpha=0.7, rate=0.5, A=jnp.eye(2)[None], quad_order=6, max_terms=40,
+    )
+    signature = VolterraSignature(kernel=kernel, trunc=2).vsig(jnp.zeros((1, 4, 2)), dt=0.25)
+
+
 def test_mittag_leffler_mixture_has_positive_weights_and_runs_vsig():
     kernel = ConvolutionKernel.mittag_leffler_mixture(
         alpha=0.7, rate=1.5, A=jnp.eye(2)[None], rate_min=1e-3, rate_max=1e3, n_factors=12,

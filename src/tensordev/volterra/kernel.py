@@ -288,6 +288,28 @@ class ConvolutionKernel:
             rates=rates, weights=density_times_rate * log_weights, A=A_arr, quad_order=quad_order,
         )
 
+    @classmethod
+    def mittag_leffler(
+        cls,
+        *,
+        alpha: Array | float,
+        rate: Array | float,
+        A: Array,
+        quad_order: int = 16,
+        max_terms: int = 96,
+    ) -> MittagLefflerKernel:
+        r"""Construct the direct Mittag--Leffler Volterra kernel.
+
+        The scalar kernel is exactly ``E_alpha(-rate * (t-s)**alpha)``.
+        Unlike :meth:`mittag_leffler_mixture`, this does not introduce a
+        finite exponential/Markovian approximation.  Coefficients use direct
+        Gauss--Legendre quadrature and generalized Mittag--Leffler
+        (Prabhakar) convolution powers, hence it is substantially slower.
+        """
+        return MittagLefflerKernel(
+            beta=jnp.ones((1,)), ml_alpha=alpha, rate=rate, A=A, quad_order=quad_order, max_terms=max_terms,
+        )
+
 
     # ------------------------------------------------------------------
     # Properties
@@ -611,6 +633,66 @@ class GammaKernel(ConvolutionKernel):
             rho,
         )
 
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True, slots=True)
+class MittagLefflerKernel(ConvolutionKernel):
+    r"""Direct scalar Mittag--Leffler kernel.
+
+    ``k(t,s) = E_alpha(-rate * (t-s)**alpha)`` for ``0 < alpha <= 1``.
+    The convolution identity
+
+    ``k**n(u) = u**(n-1) E_{alpha,n}^n(-rate*u**alpha)``
+
+    is evaluated with the Prabhakar series.  This class is designed for
+    mathematical fidelity on moderate normalized time ranges; it is not the
+    fast multi-factor approximation.
+    """
+
+    ml_alpha: Array
+    rate: Array
+    quad_order: int = field(default=16, metadata={"static": True})
+    max_terms: int = field(default=96, metadata={"static": True})
+
+    def __post_init__(self) -> None:
+        ConvolutionKernel.__post_init__(self)
+        alpha = jnp.asarray(self.ml_alpha)
+        rate = jnp.asarray(self.rate)
+        if self.q != 1:
+            raise ValueError("Mittag--Leffler kernels are scalar: A.shape[0] must be 1.")
+        if alpha.shape not in [(), (1,)] or rate.shape not in [(), (1,)]:
+            raise ValueError("alpha and rate must be scalars or shape (1,).")
+        if not (0.0 < float(alpha.reshape(())) <= 1.0):
+            raise ValueError("Mittag--Leffler alpha must satisfy 0 < alpha <= 1.")
+        if not float(rate.reshape(())) > 0.0:
+            raise ValueError("Mittag--Leffler rate must be positive.")
+        if self.quad_order < 2:
+            raise ValueError("quad_order must be at least 2.")
+        if self.max_terms < 8:
+            raise ValueError("max_terms must be at least 8.")
+        object.__setattr__(self, "ml_alpha", alpha)
+        object.__setattr__(self, "rate", rate)
+
+    def alpha(
+        self,
+        layout: MultiIndexLayout,
+        *,
+        rho: float | Array = 0.0,
+        dtype: jnp.dtype,
+        s: Array,
+        t: Array,
+        tau: Array,
+    ) -> tuple[Array, Array]:
+        dtype_ = jnp.dtype(dtype)
+        nodes_np, weights_np = np.polynomial.legendre.leggauss(int(self.quad_order))
+        return _mittag_leffler_alpha(
+            s.astype(dtype_), t.astype(dtype_), tau.astype(dtype_),
+            self.ml_alpha.reshape(()).astype(dtype_), self.rate.reshape(()).astype(dtype_),
+            layout.degree.astype(dtype_), jnp.asarray(nodes_np, dtype=dtype_),
+            jnp.asarray(weights_np, dtype=dtype_), rho, int(self.max_terms),
+        )
+
+
 @jax.jit
 def _fractional_alpha(
     s: Array,
@@ -756,6 +838,93 @@ def _gamma_dot_kappa(
         / jnp.exp(gammaln(nbeta))
     )
     return jnp.where(n == 1.0, dot_n1, dot_ngt1)
+
+
+def _prabhakar_series(
+    alpha: Array,
+    beta: Array,
+    gamma: Array,
+    z: Array,
+    *,
+    max_terms: int,
+) -> Array:
+    r"""Truncated direct series for ``E_{alpha,beta}^gamma(z)``.
+
+    The truncation is numerical evaluation only; the represented kernel and
+    convolution formula are the true Mittag--Leffler/Prabhakar ones.
+    """
+    initial = jnp.exp(-gammaln(beta)) + jnp.zeros_like(z)
+
+    def body(k: int, carry: tuple[Array, Array]) -> tuple[Array, Array]:
+        total, term = carry
+        kf = jnp.asarray(k, dtype=z.dtype)
+        ratio = (
+            (gamma + kf) / (kf + 1.0) * z
+            * jnp.exp(gammaln(alpha * kf + beta) - gammaln(alpha * (kf + 1.0) + beta))
+        )
+        term = term * ratio
+        return total + term, term
+
+    total, _ = jax.lax.fori_loop(0, max_terms - 1, body, (initial, initial))
+    return total
+
+
+@jax.jit(static_argnames=("max_terms",))
+def _mittag_leffler_alpha(
+    s: Array,
+    t: Array,
+    tau: Array,
+    alpha: Array,
+    rate: Array,
+    degree: Array,
+    nodes: Array,
+    weights: Array,
+    rho: float | Array,
+    max_terms: int,
+) -> tuple[Array, Array]:
+    r"""Direct quadrature coefficients for the Mittag--Leffler kernel."""
+    h = t - s
+    valid = (h > 0) & (tau >= t)
+    h_safe = jnp.where(valid, h, 1.0)
+    u = s[..., None] + 0.5 * h_safe[..., None] * (nodes + 1.0)
+    outer_w = 0.5 * h_safe[..., None] * weights * (((nodes + 1.0) * 0.5) ** rho)
+    n = degree + 1.0
+    dot = _mittag_leffler_dot_kappa(
+        u, t[..., None], tau[..., None], n,
+        alpha, rate, nodes, weights, max_terms=max_terms,
+    )
+    integral = jnp.sum(outer_w[..., None] * dot, axis=-2)
+    values = jnp.exp(gammaln(rho + 1.0)) * integral / (h_safe[..., None] ** n)
+    values = jnp.where(valid[..., None], values, 0.0)
+    return values[..., None, :], valid
+
+
+@jax.jit(static_argnames=("max_terms",))
+def _mittag_leffler_dot_kappa(
+    u: Array,
+    t: Array,
+    tau: Array,
+    n: Array,
+    alpha: Array,
+    rate: Array,
+    nodes: Array,
+    weights: Array,
+    *,
+    max_terms: int,
+) -> Array:
+    """Incomplete convolution ``integral_u^t k**(n-1)(v-u) k(tau-v) dv``."""
+    tau_u = tau - u
+    k_tau_u = _prabhakar_series(alpha, jnp.ones_like(tau_u), jnp.ones_like(tau_u), -rate * tau_u ** alpha, max_terms=max_terms)
+    delta = t - u
+    v = 0.5 * delta[..., None] * (nodes + 1.0)
+    inner_w = 0.5 * delta[..., None] * weights
+    order = jnp.maximum(n - 1.0, 1.0)
+    g = v[..., None] ** (order - 1.0)
+    g = g * _prabhakar_series(alpha, order, order, -rate * v[..., None] ** alpha, max_terms=max_terms)
+    remaining = tau_u[..., None] - v
+    k_remaining = _prabhakar_series(alpha, jnp.ones_like(remaining), jnp.ones_like(remaining), -rate * remaining ** alpha, max_terms=max_terms)
+    convolution = jnp.sum(inner_w[..., None] * g * k_remaining[..., None], axis=-2)
+    return jnp.where(n == 1.0, k_tau_u[..., None], convolution)
 
 
 def _rho_to_static_int(rho: float | Array) -> int:
