@@ -196,6 +196,98 @@ class ConvolutionKernel:
         b = jnp.array([(c - s) / 2, (c + s) / 2], dtype=dtype)[None, :]
         return cls.fssk(FSSK.from_matrix(Lambda=lam, A=A_arr, b=b, quad_order=quad_order))
 
+    @staticmethod
+    def _log_quadrature(*, rate_min: float, rate_max: float, n_factors: int, dtype: jnp.dtype) -> tuple[Array, Array]:
+        """Gauss--Legendre quadrature for ``integral f(r) dr`` on a log-rate interval."""
+        if not (rate_min > 0.0 and rate_max > rate_min):
+            raise ValueError("require 0 < rate_min < rate_max.")
+        if n_factors < 2:
+            raise ValueError("n_factors must be at least 2.")
+        nodes, weights = np.polynomial.legendre.leggauss(n_factors)
+        lo, hi = np.log(rate_min), np.log(rate_max)
+        log_rates = 0.5 * (hi - lo) * nodes + 0.5 * (hi + lo)
+        log_weights = 0.5 * (hi - lo) * weights
+        return jnp.asarray(np.exp(log_rates), dtype=dtype), jnp.asarray(log_weights, dtype=dtype)
+
+    @classmethod
+    def rough_fractional_mixture(
+        cls,
+        *,
+        beta: Array | float,
+        A: Array,
+        rate_min: float = 1e-4,
+        rate_max: float = 1e4,
+        n_factors: int = 16,
+        quad_order: int = 32,
+    ) -> FSSKConvolutionKernel:
+        r"""Positive Markovian approximation of a singular rough kernel.
+
+        It approximates ``u**(beta - 1) / Gamma(beta)`` for ``0 < beta < 1``
+        by a positive exponential mixture.  The identity used is
+
+        ``u**(beta - 1)/Gamma(beta) = sin(pi*beta)/pi * integral_0^inf r**(-beta) exp(-r*u) dr``.
+
+        ``rate_min`` and ``rate_max`` define the time range resolved by the
+        approximation, approximately ``[1/rate_max, 1/rate_min]``.  This is
+        the standard finite-dimensional Markovian lift used for rough
+        Volterra models.
+        """
+        A_arr = jnp.asarray(A)
+        beta_arr = jnp.asarray(beta, dtype=A_arr.dtype)
+        if beta_arr.ndim != 0:
+            raise ValueError("beta must be a scalar.")
+        beta_value = float(beta_arr)
+        if not (0.0 < beta_value < 1.0):
+            raise ValueError("rough_fractional_mixture requires 0 < beta < 1.")
+        rates, log_weights = cls._log_quadrature(
+            rate_min=rate_min, rate_max=rate_max, n_factors=n_factors, dtype=A_arr.dtype,
+        )
+        weights = jnp.sin(jnp.pi * beta_arr) / jnp.pi * rates ** (1.0 - beta_arr) * log_weights
+        return cls.exponential_mixture(rates=rates, weights=weights, A=A_arr, quad_order=quad_order)
+
+    @classmethod
+    def mittag_leffler_mixture(
+        cls,
+        *,
+        alpha: Array | float,
+        rate: Array | float,
+        A: Array,
+        rate_min: float = 1e-4,
+        rate_max: float = 1e4,
+        n_factors: int = 24,
+        quad_order: int = 32,
+    ) -> FSSKConvolutionKernel:
+        r"""Positive Markovian approximation of ``E_alpha(-rate*u**alpha)``.
+
+        For ``0 < alpha < 1`` and ``rate > 0``, the completely monotone
+        Mittag--Leffler relaxation has a positive Laplace-mixture density.
+        Log-rate quadrature converts it into a finite state-space Volterra
+        kernel.  The resolved time range is approximately
+        ``[1/rate_max, 1/rate_min]``.
+        """
+        A_arr = jnp.asarray(A)
+        dtype = A_arr.dtype
+        alpha_arr = jnp.asarray(alpha, dtype=dtype)
+        rate_arr = jnp.asarray(rate, dtype=dtype)
+        if alpha_arr.ndim != 0 or rate_arr.ndim != 0:
+            raise ValueError("alpha and rate must be scalars.")
+        alpha_value, rate_value = float(alpha_arr), float(rate_arr)
+        if not (0.0 < alpha_value < 1.0):
+            raise ValueError("mittag_leffler_mixture requires 0 < alpha < 1.")
+        if not rate_value > 0.0:
+            raise ValueError("rate must be positive.")
+        rates, log_weights = cls._log_quadrature(
+            rate_min=rate_min, rate_max=rate_max, n_factors=n_factors, dtype=dtype,
+        )
+        power = rates ** alpha_arr
+        density_times_rate = (
+            rate_arr * jnp.sin(jnp.pi * alpha_arr) / jnp.pi * power
+            / (power ** 2 + 2.0 * rate_arr * power * jnp.cos(jnp.pi * alpha_arr) + rate_arr ** 2)
+        )
+        return cls.exponential_mixture(
+            rates=rates, weights=density_times_rate * log_weights, A=A_arr, quad_order=quad_order,
+        )
+
 
     # ------------------------------------------------------------------
     # Properties
