@@ -1057,7 +1057,7 @@ class FSSKConvolutionKernel(ConvolutionKernel):
         h_flat = h_safe.reshape((-1,))
         lookahead_flat = lookahead_safe.reshape((-1,))
 
-        rho_int = _rho_to_static_int(rho)
+        rho_arr = jnp.asarray(rho, dtype=real_dtype)
 
         b = self.b.astype(real_dtype)
 
@@ -1070,16 +1070,30 @@ class FSSKConvolutionKernel(ConvolutionKernel):
             dtype=real_dtype,
         )
 
-        psi_flat = eval_psi(
+        # ``rho`` is traced inside the generic JAX iteration.  Evaluate the
+        # three supported basis moments and select without converting a tracer
+        # to a Python integer.
+        psi0 = eval_psi(
             self.lam,
             h_flat,
             zeta_c,
             slope,
             gamma,
             r,
-            rho=rho_int,
+            rho=0,
             dtype=real_dtype,
-        )  # (B, M, R)
+        )
+        psi1 = eval_psi(
+            self.lam, h_flat, zeta_c, slope, gamma, r,
+            rho=1,
+            dtype=real_dtype,
+        )
+        psi2 = eval_psi(
+            self.lam, h_flat, zeta_c, slope, gamma, r,
+            rho=2,
+            dtype=real_dtype,
+        )
+        psi_flat = jnp.where(rho_arr == 0, psi0, jnp.where(rho_arr == 1, psi1, psi2))  # (B, M, R)
 
         E_flat = self.lam.expm(
             lookahead_flat,
