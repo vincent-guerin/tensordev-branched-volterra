@@ -3,6 +3,7 @@ from functools import partial
 from .coeffs import VolterraCoefficients
 from .kernel import ConvolutionKernel, FractionalKernel, FSSKConvolutionKernel, GammaKernel, MittagLefflerKernel
 from .rough_path import VolterraRoughPath
+from .multitime_rough import MultitimeVolterraRoughPath, MultitimeVolterraRoughPathResult
 from .signature import VolterraSignature, vsig
 from .iteration_quad import quadratic_iteration
 from .iteration_fft import fft_iteration
@@ -19,6 +20,8 @@ __all__ = [
     "GammaKernel",
     "MittagLefflerKernel",
     "VolterraRoughPath",
+    "MultitimeVolterraRoughPath",
+    "MultitimeVolterraRoughPathResult",
     "VolterraSignature",
     "vsig",
     "vsig_fft",
