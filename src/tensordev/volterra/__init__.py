@@ -1,7 +1,7 @@
 from functools import partial
 
 from .coeffs import VolterraCoefficients
-from .kernel import ConvolutionKernel, FractionalKernel, FSSKConvolutionKernel, GammaKernel
+from .kernel import ConvolutionKernel, FractionalKernel, FSSKConvolutionKernel, GammaKernel, MittagLefflerKernel
 from .signature import VolterraSignature, vsig
 from .iteration_quad import quadratic_iteration
 from .iteration_fft import fft_iteration
@@ -16,6 +16,7 @@ __all__ = [
     "FractionalKernel",
     "FSSKConvolutionKernel",
     "GammaKernel",
+    "MittagLefflerKernel",
     "VolterraSignature",
     "vsig",
     "vsig_fft",
