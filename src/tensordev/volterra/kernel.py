@@ -135,6 +135,67 @@ class ConvolutionKernel:
         """
         return FSSKConvolutionKernel.from_fssk(fssk)
 
+    @classmethod
+    def exponential_mixture(cls, *, rates: Array, weights: Array, A: Array, quad_order: int = 32) -> FSSKConvolutionKernel:
+        r"""Construct ``sum_r weights[r] * exp(-rates[r] * (t-s))``.
+
+        This exact Prony/state-space kernel keeps the usual
+        :class:`VolterraSignature` interface. ``rates`` and ``weights`` have
+        shape ``(R,)``; ``A`` must have shape ``(1, m, d)``.
+        """
+        A_arr = jnp.asarray(A)
+        rates_arr = jnp.asarray(rates, dtype=A_arr.dtype)
+        weights_arr = jnp.asarray(weights, dtype=A_arr.dtype)
+        if A_arr.ndim != 3 or A_arr.shape[0] != 1:
+            raise ValueError("exponential_mixture requires A.shape == (1, m, d).")
+        if rates_arr.ndim != 1 or weights_arr.ndim != 1 or rates_arr.shape != weights_arr.shape:
+            raise ValueError("rates and weights must be one-dimensional arrays with the same shape.")
+        if rates_arr.size == 0:
+            raise ValueError("rates and weights must contain at least one component.")
+        if bool(jnp.any(rates_arr < 0)):
+            raise ValueError("rates must be non-negative.")
+        fssk = FSSK.from_matrix(
+            Lambda=jnp.diag(rates_arr), A=A_arr, b=weights_arr[None, :], quad_order=quad_order,
+        )
+        return cls.fssk(fssk)
+
+    @classmethod
+    def damped_oscillatory(
+        cls,
+        *,
+        decay: Array | float,
+        frequency: Array | float,
+        A: Array,
+        cos_scale: Array | float = 1.0,
+        sin_scale: Array | float = 0.0,
+        quad_order: int = 32,
+    ) -> FSSKConvolutionKernel:
+        r"""Construct an exponentially damped sine/cosine kernel.
+
+        The scalar kernel is ``exp(-decay*u) * (cos_scale*cos(frequency*u)
+        + sin_scale*sin(frequency*u))``, for ``u=t-s``.  It uses a real
+        two-dimensional state space and stays compatible with
+        :class:`VolterraSignature`. ``A`` must have shape ``(1, m, d)``.
+        """
+        A_arr = jnp.asarray(A)
+        if A_arr.ndim != 3 or A_arr.shape[0] != 1:
+            raise ValueError("damped_oscillatory requires A.shape == (1, m, d).")
+        dtype = A_arr.dtype
+        decay_arr = jnp.asarray(decay, dtype=dtype)
+        frequency_arr = jnp.asarray(frequency, dtype=dtype)
+        if decay_arr.ndim != 0 or frequency_arr.ndim != 0:
+            raise ValueError("decay and frequency must be scalars.")
+        if bool(decay_arr < 0):
+            raise ValueError("decay must be non-negative.")
+        c = jnp.asarray(cos_scale, dtype=dtype)
+        s = jnp.asarray(sin_scale, dtype=dtype)
+        if c.ndim != 0 or s.ndim != 0:
+            raise ValueError("cos_scale and sin_scale must be scalars.")
+        lam = jnp.array([[decay_arr, -frequency_arr], [frequency_arr, decay_arr]], dtype=dtype)
+        # 1^T exp(-u Lambda) b = exp(-decay*u) (c cos(frequency*u) + s sin(frequency*u)).
+        b = jnp.array([(c - s) / 2, (c + s) / 2], dtype=dtype)[None, :]
+        return cls.fssk(FSSK.from_matrix(Lambda=lam, A=A_arr, b=b, quad_order=quad_order))
+
 
     # ------------------------------------------------------------------
     # Properties
