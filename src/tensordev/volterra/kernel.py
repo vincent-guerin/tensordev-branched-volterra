@@ -310,6 +310,29 @@ class ConvolutionKernel:
             beta=jnp.ones((1,)), ml_alpha=alpha, rate=rate, A=A, quad_order=quad_order, max_terms=max_terms,
         )
 
+    @classmethod
+    def tricomi(
+        cls,
+        *,
+        a: Array | float,
+        b: Array | float,
+        tau: Array | float,
+        A: Array,
+        scale: Array | float = 1.0,
+        quad_order: int = 12,
+    ) -> TricomiKernel:
+        r"""Construct the two-scale Tricomi/Sonine Volterra kernel.
+
+        ``k(u) = scale / (Gamma(a) tau) * (u/tau)**(a-1)
+        * (1 + u/tau)**(b-a-1)`` for ``u > 0``.  The admissible
+        parameters are ``0 < a < 1``, ``1 < b < 2``, and ``tau > 0``.
+        Coefficients use direct nested quadrature and are intended for
+        moderate truncation (normally 2 or 3).
+        """
+        return TricomiKernel(
+            beta=jnp.asarray(a).reshape((1,)), tricomi_a=a, tricomi_b=b,
+            timescale=tau, scale=scale, A=A, quad_order=quad_order,
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -636,6 +659,57 @@ class GammaKernel(ConvolutionKernel):
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True, slots=True)
+class TricomiKernel(ConvolutionKernel):
+    r"""Direct two-scale Tricomi kernel of Colombaro--Tudela (2026).
+
+    The kernel is a causal Sonine kernel whose Laplace transform is
+    ``U(a, b, tau*s)``.  Its two asymptotic memory exponents are ``a-1``
+    near zero and ``b-2`` at long lags.
+    """
+
+    tricomi_a: Array
+    tricomi_b: Array
+    timescale: Array
+    scale: Array
+    quad_order: int = field(default=12, metadata={"static": True})
+
+    def __post_init__(self) -> None:
+        ConvolutionKernel.__post_init__(self)
+        a = jnp.asarray(self.tricomi_a)
+        b = jnp.asarray(self.tricomi_b)
+        tau = jnp.asarray(self.timescale)
+        scale = jnp.asarray(self.scale)
+        if self.q != 1:
+            raise ValueError("Tricomi kernels are scalar: A.shape[0] must be 1.")
+        if any(x.shape not in [(), (1,)] for x in (a, b, tau, scale)):
+            raise ValueError("a, b, tau and scale must be scalars or shape (1,).")
+        a_value, b_value = float(a.reshape(())), float(b.reshape(()))
+        if not (0.0 < a_value < 1.0 and 1.0 < b_value < 2.0):
+            raise ValueError("Tricomi parameters must satisfy 0 < a < 1 and 1 < b < 2.")
+        if not float(tau.reshape(())) > 0.0:
+            raise ValueError("Tricomi tau must be positive.")
+        if not float(scale.reshape(())) > 0.0:
+            raise ValueError("Tricomi scale must be positive.")
+        if self.quad_order < 2:
+            raise ValueError("quad_order must be at least 2.")
+        object.__setattr__(self, "tricomi_a", a)
+        object.__setattr__(self, "tricomi_b", b)
+        object.__setattr__(self, "timescale", tau)
+        object.__setattr__(self, "scale", scale)
+
+    def alpha(self, layout: MultiIndexLayout, *, rho: float | Array, dtype: jnp.dtype, s: Array, t: Array, tau: Array) -> tuple[Array, Array]:
+        nodes_np, weights_np = np.polynomial.legendre.leggauss(int(self.quad_order))
+        return _tricomi_alpha(
+            s.astype(dtype), t.astype(dtype), tau.astype(dtype),
+            self.tricomi_a.reshape(()).astype(dtype), self.tricomi_b.reshape(()).astype(dtype),
+            self.timescale.reshape(()).astype(dtype), self.scale.reshape(()).astype(dtype),
+            layout.degree.astype(dtype), jnp.asarray(nodes_np, dtype=dtype),
+            jnp.asarray(weights_np, dtype=dtype), rho,
+            max_order=layout.trunc + 1,
+        )
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True, slots=True)
 class MittagLefflerKernel(ConvolutionKernel):
     r"""Direct scalar Mittag--Leffler kernel.
 
@@ -839,6 +913,42 @@ def _gamma_dot_kappa(
     )
     return jnp.where(n == 1.0, dot_n1, dot_ngt1)
 
+
+def _tricomi_value(u: Array, a: Array, b: Array, timescale: Array, scale: Array) -> Array:
+    """Causal Tricomi memory law kappa_{a,b,tau}(u)."""
+    positive_u = jnp.maximum(u, jnp.finfo(u.dtype).tiny)
+    return (scale * positive_u ** (a - 1.0) * timescale ** (-a)
+            * (1.0 + positive_u / timescale) ** (b - a - 1.0)
+            / jnp.exp(gammaln(a)))
+
+
+def _tricomi_dot(order: int, u: Array, t: Array, tau: Array, a: Array, b: Array, timescale: Array, scale: Array, nodes: Array, weights: Array) -> Array:
+    """Ordered-simplex convolution restricted to the interval [u, t]."""
+    if order == 1:
+        return _tricomi_value(tau - u, a, b, timescale, scale)
+    delta = t - u
+    v = u[..., None] + 0.5 * delta[..., None] * (nodes + 1.0)
+    inner_weight = 0.5 * delta[..., None] * weights
+    return jnp.sum(inner_weight * _tricomi_value(v - u[..., None], a, b, timescale, scale)
+        * _tricomi_dot(order - 1, v, t[..., None], tau[..., None], a, b, timescale, scale, nodes, weights), axis=-1)
+
+
+@jax.jit(static_argnames=("max_order",))
+def _tricomi_alpha(s: Array, t: Array, tau: Array, a: Array, b: Array, timescale: Array, scale: Array, degree: Array, nodes: Array, weights: Array, rho: float | Array, *, max_order: int) -> tuple[Array, Array]:
+    """Direct quadrature coefficients for the exact Tricomi kernel law."""
+    h = t - s
+    valid = (h > 0) & (tau >= t)
+    h_safe = jnp.where(valid, h, 1.0)
+    tau_safe = jnp.where(valid, tau, t + h_safe)
+    u = s[..., None] + 0.5 * h_safe[..., None] * (nodes + 1.0)
+    outer_weight = 0.5 * h_safe[..., None] * weights * (((nodes + 1.0) * 0.5) ** rho)
+    dot_orders = jnp.stack([_tricomi_dot(order, u, t[..., None], tau_safe[..., None], a, b, timescale, scale, nodes, weights) for order in range(1, max_order + 1)], axis=-1)
+    dot = jnp.take(dot_orders, degree.astype(jnp.int32), axis=-1)
+    integral = jnp.sum(outer_weight[..., None] * dot, axis=-2)
+    n = degree + 1.0
+    values = jnp.exp(gammaln(rho + 1.0)) * integral / h_safe[..., None] ** n
+    values = jnp.where(valid[..., None], values, 0.0)
+    return values[..., None, :], valid
 
 def _prabhakar_series(
     alpha: Array,

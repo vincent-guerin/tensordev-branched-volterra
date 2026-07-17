@@ -256,6 +256,7 @@ Available kernel constructors:
 |---|---|---|
 | `ConvolutionKernel.fractional` | $k_p(t,s) = \Gamma(\beta_p)^{-1}(t-s)^{\beta_p-1}$ | `beta`, `A` |
 | `ConvolutionKernel.gamma` | $k(t,s) = \mathrm{scale}\cdot e^{-\mathrm{rate}(t-s)}\cdot\Gamma(\beta)^{-1}(t-s)^{\beta-1}$ | `beta`, `rate`, `scale`, `A` |
+| `ConvolutionKernel.tricomi` | $k(u)=\frac{\mathrm{scale}}{\Gamma(a)\tau}(u/\tau)^{a-1}(1+u/\tau)^{b-a-1}$ | `a`, `b`, `tau`, `scale`, `A` |
 | `ConvolutionKernel.piecewise_constant` | $k(i,j) = B_{p,i,j}$ | `B`, `A` |
 
 Setting `beta=1` with `ConvolutionKernel.fractional` recovers the classical iterated-integral signature.
