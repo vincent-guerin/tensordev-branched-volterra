@@ -1,7 +1,7 @@
 from functools import partial
 
 from .coeffs import VolterraCoefficients
-from .kernel import ConvolutionKernel, FractionalKernel, FSSKConvolutionKernel, GammaKernel, MittagLefflerKernel
+from .kernel import ConvolutionKernel, FractionalKernel, FSSKConvolutionKernel, GammaKernel, MittagLefflerKernel, TricomiKernel
 from .rough_path import VolterraRoughPath
 from .multitime_rough_complete import (
     ChenVolterraReport,
@@ -30,6 +30,7 @@ __all__ = [
     "FSSKConvolutionKernel",
     "GammaKernel",
     "MittagLefflerKernel",
+    "TricomiKernel",
     "VolterraRoughPath",
     "MultitimeVolterraRoughPath",
     "MultitimeVolterraRoughPathResult",

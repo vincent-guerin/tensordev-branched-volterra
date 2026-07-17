@@ -12,6 +12,8 @@ from .volterra import (
     VolterraSignature,
     FractionalKernel,
     GammaKernel,
+    MittagLefflerKernel,
+    TricomiKernel,
     FSSKConvolutionKernel,
 )
 
@@ -69,6 +71,8 @@ __all__ = [
     "VolterraSignature",
     "FractionalKernel",
     "GammaKernel",
+    "MittagLefflerKernel",
+    "TricomiKernel",
     "FSSKConvolutionKernel",
     # sss
     "fssk_vsig",

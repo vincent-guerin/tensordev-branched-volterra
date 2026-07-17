@@ -46,3 +46,25 @@ def test_mittag_leffler_mixture_has_positive_weights_and_runs_vsig():
         alpha=0.7, rate=1.5, A=jnp.eye(2)[None], rate_min=1e-3, rate_max=1e3, n_factors=12,
     )
     assert jnp.all(kernel.b >= 0.0)
+
+
+def test_direct_tricomi_kernel_runs_vsig_and_has_two_scale_parameters():
+    import jax.numpy as jnp
+    from tensordev.volterra import ConvolutionKernel, VolterraSignature
+
+    kernel = ConvolutionKernel.tricomi(
+        a=0.6, b=1.4, tau=1.0,
+        A=jnp.eye(2, dtype=jnp.float32)[None], quad_order=4,
+    )
+    X = jnp.array([[[0.0, 0.0], [0.1, 0.2], [0.2, 0.1]]], dtype=jnp.float32)
+    result = VolterraSignature(kernel=kernel, trunc=2).vsig(X, dt=0.1)
+    assert tuple(level.shape for level in result) == ((1,), (2,), (4,))
+
+
+def test_tricomi_kernel_rejects_parameters_outside_sonine_range():
+    import jax.numpy as jnp
+    import pytest
+    from tensordev.volterra import ConvolutionKernel
+
+    with pytest.raises(ValueError, match="0 < a < 1"):
+        ConvolutionKernel.tricomi(a=1.0, b=1.4, tau=1.0, A=jnp.eye(1)[None])
